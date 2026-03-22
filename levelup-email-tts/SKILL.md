@@ -190,12 +190,13 @@ After all conversions, report to the user:
   chronologically.
 - If an MP3 already exists for a given slug it is skipped — the pipeline is
   idempotent and safe to re-run.
-- Voices are assigned per newsletter series (matched on subject prefix):
-  | Subject prefix   | Voice        | Character          |
-  |------------------|--------------|---------------------|
-  | `TBL:`           | `af_heart`   | warm female (US)   |
-  | `Friday Forward` | `am_michael` | male (US)          |
-  | *(other/unknown)*| `af_bella`   | female fallback    |
+- Voices are assigned per newsletter series. Subject prefix matched first, then sender substring:
+| Match                        | Voice                            | Character              |
+|------------------------------|----------------------------------|------------------------|
+| Subject starts with `TBL:`   | `af_heart`                       | female (US)            |
+| Subject starts with `Friday Forward` | `af_heart`               | female (US)            |
+| Sender contains `level up newsletter` | `am_michael` 70% + `am_adam` 30% | blended male (US) |
+| *(other/unknown)*            | `af_bella`                       | female fallback        |
   The `voice` field in the JSON input overrides the automatic mapping.
   Available voices: `af_heart`, `af_bella`, `af_nicole`, `af_sarah`, `af_sky`,
   `am_adam`, `am_michael`, `bf_emma`, `bf_isabella`, `bm_george`, `bm_lewis`.

@@ -15,6 +15,7 @@ Run inside the kokoro-pdf-tts uv environment:
         uv run python ~/.claude/skills/levelup-email-tts/scripts/run_tts.py /tmp/levelup_emails.json
 """
 import sys, os, re, json, tempfile, subprocess
+import torch
 from mutagen.id3 import ID3, TIT2, TPE1, TALB, TDRC, TCON, ID3NoHeaderError
 
 PDF_TTS_DIR = os.path.expanduser("~/devel/kokoro-pdf-tts")
@@ -31,19 +32,36 @@ os.makedirs(AUDIO_DIR, exist_ok=True)
 
 # Voice assignments per newsletter series.
 # Matched against the start of the subject line (case-insensitive).
-# At least one male voice (am_michael for Friday Forward).
 VOICE_MAP = [
-    ("tbl:",            "af_heart"),     # The Better Leader — warm female
-    ("friday forward",  "am_michael"),   # Friday Forward — male
+    ("tbl:",            "af_heart"),     # The Better Leader — female
+    ("friday forward",  "af_heart"),     # Friday Forward — female
 ]
 DEFAULT_VOICE = "af_bella"              # fallback for unrecognised series
 
+# Lazy-loaded 70/30 blend of am_michael + am_adam for Level Up Newsletter.
+_LEVELUP_VOICE = None
 
-def pick_voice(subject: str) -> str:
+
+def get_levelup_voice():
+    """Return a blended voice tensor: am_michael 70% + am_adam 30%."""
+    global _LEVELUP_VOICE
+    if _LEVELUP_VOICE is None:
+        from kokoro import KPipeline
+        _pipe = KPipeline(lang_code="a")
+        t1 = _pipe.load_voice("am_michael")
+        t2 = _pipe.load_voice("am_adam")
+        _LEVELUP_VOICE = 0.7 * t1 + 0.3 * t2
+    return _LEVELUP_VOICE
+
+
+def pick_voice(subject: str, sender: str = ""):
     s = subject.lower()
     for prefix, voice in VOICE_MAP:
         if s.startswith(prefix):
             return voice
+    # Sender-based matching for Level Up Newsletter (70/30 male blend).
+    if "level up newsletter" in sender.lower():
+        return get_levelup_voice()
     return DEFAULT_VOICE
 
 
@@ -111,8 +129,9 @@ def process_email(subject, date_str, body_plain, body_html, sender="", voice=Non
         print(f"  Skipping '{subject}' -- cleaned body too short ({len(text)} chars)")
         return None
 
-    chosen_voice = voice or pick_voice(subject)
-    print(f"  Text length: {len(text)} chars  |  voice: {chosen_voice}")
+    chosen_voice = voice or pick_voice(subject, sender=sender)
+    voice_label = "am_michael+am_adam(70/30)" if isinstance(chosen_voice, torch.FloatTensor) else chosen_voice
+    print(f"  Text length: {len(text)} chars  |  voice: {voice_label}")
     text_to_audio(text, voice=chosen_voice, output_file=out_path)
     tag_mp3(out_path, subject=subject, date_str=date_str, sender=sender)
     print(f"  Saved: {out_path}")
