@@ -1,0 +1,3 @@
+[submodule "chrome-cdp"]
+	path = chrome-cdp-skill
+	url = https://github.com/pasky/chrome-cdp-skill.git
