@@ -1,0 +1,12 @@
+# home-automation crontab entries
+# Install: crontab -e and paste the lines below
+# All paths use absolute references; ~/.claude/skills must be symlinked to ~/devel/home-automation/skills
+
+# Remote control bridge (restarts on reboot)
+@reboot cd /home/carl/devel && /home/carl/.local/bin/claude remote-control --name hallway
+
+# LevelUp newsletter → TTS → Audiobookshelf (daily at 07:30 UTC)
+30 7 * * * /home/carl/.local/bin/claude -p "run the levelup email TTS pipeline" >> /home/carl/.claude/skills/levelup-email-tts/cron.log 2>&1
+
+# Getting Carlibrated podcast (every Friday at 07:30 UTC)
+30 7 * * 5 /home/carl/.local/bin/claude -p "run carlibrated" >> /home/carl/.claude/skills/getting-carlibrated/cron.log 2>&1

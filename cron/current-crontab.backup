@@ -1,0 +1,3 @@
+@reboot cd /home/car/devel && /home/carl/.local/bin/claude remote-control --name hallway
+30 7 * * * /home/carl/.local/bin/claude -p "run the levelup email TTS pipeline" >> /home/carl/.claude/skills/levelup-email-tts/cron.log 2>&1
+30 7 * * 5 /home/carl/.local/bin/claude -p "run carlibrated" >> /home/carl/.claude/skills/getting-carlibrated/cron.log 2>&1

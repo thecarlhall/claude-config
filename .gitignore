@@ -21,4 +21,11 @@ Thumbs.db
 .claude/settings.local.json
 __pycache__/
 *.pyc
+*.pyo
 
+# Python build artifacts
+.venv/
+build/
+dist/
+wheels/
+*.egg-info/
