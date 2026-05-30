@@ -1,9 +1,0 @@
-[submodule "skills/chrome-cdp-server"]
-	path = skills/chrome-cdp-skill
-	url = https://github.com/pasky/chrome-cdp-skill.git
-[submodule "mcp/bambu-mcp-server"]
-	path = mcp/bambu-mcp-server
-	url = https://github.com/Shockedrope/bambu-mcp-server.git
-[submodule "skills/chrome-cdp-skill"]
-	path = skills/chrome-cdp-skill
-	url = https://github.com/pasky/chrome-cdp-skill.git

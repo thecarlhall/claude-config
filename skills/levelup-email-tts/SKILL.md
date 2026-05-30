@@ -174,12 +174,14 @@ It reads a JSON array from a file path passed as the first argument. Each object
 - `body_plain` — plain-text body (may be empty string)
 - `body_html` — HTML body (may be empty string)
 - `sender` — (optional) sender name, used as ID3 artist tag
+- `msg_id` — (optional but **required for autonomous runs**) Gmail message ID. If present, the message is moved to Gmail **Trash** after a successful upload, so the inbox stays clean on the next run. Omit to disable per-email.
 
-Write the email data to `/tmp/levelup_emails.json`, then run:
+Write the email data to `/tmp/levelup_emails.json`, then **run in the background** using the
+`run_in_background: true` Bash parameter so the user isn't blocked:
 
 ```bash
 cd ~/devel/kokoro-pdf-tts && \
-  cat /tmp/levelup_emails.json | uv run python ~/.claude/skills/levelup-email-tts/scripts/run_tts.py
+  uv run python ~/.claude/skills/levelup-email-tts/scripts/run_tts.py /tmp/levelup_emails.json
 ```
 
 Example data file (`/tmp/levelup_emails.json`):
@@ -190,21 +192,50 @@ Example data file (`/tmp/levelup_emails.json`):
     "date_str": "2026-03-13",
     "body_plain": "...",
     "body_html": "",
-    "sender": "Robert Glazer"
+    "sender": "Robert Glazer",
+    "msg_id": "18f1c0a3b7d2e9f4"
   }
 ]
 ```
+
+The `msg_id` field is the Gmail message ID returned by `gmail_search_messages` /
+`gmail_read_message` (the top-level `id` of each message). Pass it through so
+`run_tts.py` can trash the message after upload.
 
 This approach avoids shell-escaping issues with email bodies that contain special characters, backslashes, or multi-line content.
 
 The script automatically selects Route A (HTML→PDF) when `body_html` is available,
 otherwise falls back to Route B (plain text). It skips emails whose MP3 already exists.
 
+### Step 5b — Monitor progress
+
+Immediately after starting the background Bash task, launch a Monitor on the output file path
+returned in the task result. The output path is in the Bash tool result
+(format: `/tmp/claude-1000/.../<task_id>.output`).
+
+```
+Monitor command:
+  tail -f <output_path> | grep --line-buffered -E "Done:|Already exists|Uploaded OK|Moved email|Trash failed|Traceback|Error|skipping"
+
+description: "LevelUp TTS — completed file notifications"
+persistent: false
+timeout_ms: 3600000
+```
+
+Each time a Monitor event arrives, send the user a one-line progress update:
+- **Done** line → "✓ _filename_ (_duration_)"
+- **Already exists / skipping** line → "– _filename_ (already exists)"
+- **Moved email** line → "🗑 email trashed (_msg_id_)"
+- **Trash failed** line → warn the user; the MP3 was uploaded but the email remains in inbox
+- **Error / Traceback** line → alert the user immediately
+
+When the background Bash task completes (you receive a task notification), send a final summary.
+
 ---
 
 ## Output
 
-After all conversions, report to the user:
+After all conversions are complete, report to the user:
 - Number of emails processed
 - File paths for each MP3 created
 - Upload status for each file (`carl@nuc:containers/audiobookshelf/podcasts/LevelUp/`)
@@ -219,12 +250,15 @@ After all conversions, report to the user:
 - If an MP3 already exists for a given slug it is skipped — the pipeline is
   idempotent and safe to re-run.
 - Voices are assigned per newsletter series. Subject prefix matched first, then sender substring:
-| Match                        | Voice                            | Character              |
-|------------------------------|----------------------------------|------------------------|
-| Subject starts with `TBL:`   | `af_heart`                       | female (US)            |
-| Subject starts with `Friday Forward` | `af_heart`               | female (US)            |
-| Sender contains `level up newsletter` | `am_michael` 50% + `am_adam` 50% | blended male (US) |
-| *(other/unknown)*            | `af_bella`                       | female fallback        |
+| Match                                                          | Voice                                                  | Character                                                |
+|----------------------------------------------------------------|--------------------------------------------------------|----------------------------------------------------------|
+| Subject starts with `TBL:`                                     | `af_heart`                                             | female (US) — The Better Leader                          |
+| Sender contains `adam grant`                                   | `am_michael` 35% + `bm_lewis` 20% + `af_heart` 25% + `af_sky` 20% | dynamic, animated, higher-pitched male — Adam Grant's "Granted" |
+| Sender contains `robert glazer` *or* subject starts with `Friday Forward` | `am_michael` 30% + `bm_george` 15% + `bm_lewis` 10% + `am_adam` 10% + `af_bella` 15% + `af_heart` 10% + `af_sarah` 10% | 7-voice layered podcast-host blend — Robert Glazer's "Friday Forward" |
+| Sender contains `ethan evans` *or* `level up newsletter`       | `am_adam` 65% + `am_michael` 25% + `af_nicole` 10%     | firm/articulate US male w/ warmth lift — Ethan Evans's "Level Up Newsletter" |
+| Sender contains `scott alexander` *or* `astralcodexten`        | `bm_lewis` 40% + `am_michael` 35% + `af_nicole` 15% + `am_adam` 10% | light, thoughtful UK-leaning male + softness — Scott Alexander's "Astral Codex Ten" |
+| Sender contains `melinda wenner moyer` *or* `melindawmoyer`    | `af_nicole` 60% + `af_heart` 40%                       | warm conversational US female — Melinda Wenner Moyer's "Now What" |
+| *(other/unknown)*                                              | `af_bella`                                             | female fallback                                          |
   The `voice` field in the JSON input overrides the automatic mapping.
   Available voices: `af_heart`, `af_bella`, `af_nicole`, `af_sarah`, `af_sky`,
   `am_adam`, `am_michael`, `bf_emma`, `bf_isabella`, `bm_george`, `bm_lewis`.

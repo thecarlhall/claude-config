@@ -48,9 +48,11 @@ H4_PT     = 13   # ratio 1.08 → "deck"
 
 HEADING_TAGS = {"h1", "h2", "h3", "h4", "h5", "h6"}
 
+# Elements whose content should be skipped; must have matching close tags to balance skip_depth
 SKIP_TAGS = {"script", "style", "head", "noscript", "iframe",
-             "svg", "path", "meta", "link", "button", "input", "form",
-             "img", "picture", "figure"}
+             "svg", "button", "form", "picture", "figure"}
+# Void elements (no closing tag) — just ignore, don't touch skip_depth
+VOID_SKIP_TAGS = {"img", "meta", "link", "input", "path", "br", "hr", "source", "track", "wbr"}
 
 
 # ---------------------------------------------------------------------------
@@ -96,6 +98,10 @@ class _StructuralParser(HTMLParser):
 
     def handle_starttag(self, tag, attrs):
         tag = tag.lower()
+        if tag in VOID_SKIP_TAGS:
+            if tag == "br":
+                self._buf.append(" ")
+            return
         if tag in SKIP_TAGS:
             self._skip_depth += 1
             return
@@ -104,12 +110,11 @@ class _StructuralParser(HTMLParser):
         if tag in self.BLOCK_CLOSE_TAGS:
             self._flush()
             self._current_tag = tag if tag in (HEADING_TAGS | {"li", "blockquote", "pre"}) else "p"
-        # <br> injects a space so words don't run together
-        if tag == "br":
-            self._buf.append(" ")
 
     def handle_endtag(self, tag):
         tag = tag.lower()
+        if tag in VOID_SKIP_TAGS:
+            return
         if tag in SKIP_TAGS:
             self._skip_depth = max(0, self._skip_depth - 1)
             return
@@ -356,7 +361,7 @@ def html_to_pdf(html: str, pdf_path: str, subject: str = "") -> None:
     # Optional subject line as H1 if the email itself doesn't start with one
     if subject and (not nodes or nodes[0].tag not in {"h1"}):
         story.append(Paragraph(_esc(subject), styles["h1"]))
-        story.append(Spacer(1, 6 * pt))
+        story.append(Spacer(1, 6))
 
     for nd in nodes:
         text = _esc(nd.text.strip())

@@ -16,3 +16,9 @@ Thumbs.db
 *.swp
 *~
 
+# Runtime / generated artifacts (per-skill cron logs, local settings, Python caches)
+*.log
+.claude/settings.local.json
+__pycache__/
+*.pyc
+

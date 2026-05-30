@@ -20,38 +20,128 @@ from mutagen.id3 import ID3, TIT2, TPE1, TALB, TDRC, TCON, ID3NoHeaderError
 
 PDF_TTS_DIR = os.path.expanduser("~/devel/kokoro-pdf-tts")
 CLEANER_DIR = os.path.dirname(os.path.abspath(__file__))
+GOOGLE_AUTH = os.path.expanduser("~/.config/home-automation")
 AUDIO_DIR   = os.path.join(PDF_TTS_DIR, "audio", "levelup")
 
 sys.path.insert(0, PDF_TTS_DIR)
 sys.path.insert(0, CLEANER_DIR)
+sys.path.insert(0, GOOGLE_AUTH)
 
 from pdf_tts     import extract_text_from_pdf, text_to_audio
 from clean_email import clean_body, html_to_pdf
 
 os.makedirs(AUDIO_DIR, exist_ok=True)
 
+# Lazy Gmail client for trashing processed messages.
+_GMAIL_CLIENT = None
+
+
+def _gmail():
+    global _GMAIL_CLIENT
+    if _GMAIL_CLIENT is None:
+        from google_auth import get_gmail
+        _GMAIL_CLIENT = get_gmail()
+    return _GMAIL_CLIENT
+
+
+def trash_message(msg_id: str) -> bool:
+    """Move a Gmail message to Trash. Returns True on success."""
+    try:
+        _gmail().users().messages().trash(userId="me", id=msg_id).execute()
+        print(f"  Moved email {msg_id} to Trash")
+        return True
+    except Exception as e:
+        print(f"  Trash failed for {msg_id}: {e}")
+        return False
+
 # Voice assignments per newsletter series.
 # Matched against the start of the subject line (case-insensitive).
+# Note: Friday Forward (Robert Glazer) and Level Up Newsletter (Ethan Evans) are
+# now handled by sender/subject matching in pick_voice() since they use blends.
 VOICE_MAP = [
     ("tbl:",            "af_heart"),     # The Better Leader — female
-    ("friday forward",  "af_heart"),     # Friday Forward — female
 ]
 DEFAULT_VOICE = "af_bella"              # fallback for unrecognised series
 
-# Lazy-loaded 50/50 blend of am_michael + am_adam for Level Up Newsletter.
-_LEVELUP_VOICE = None
+# Lazy-loaded voice blends, keyed by author/newsletter.
+_GRANTED_VOICE   = None    # Adam Grant — "Granted"
+_GLAZER_VOICE    = None    # Robert Glazer — "Friday Forward"
+_EVANS_VOICE     = None    # Ethan Evans — "Level Up Newsletter"
+_ALEXANDER_VOICE = None    # Scott Alexander — "Astral Codex Ten"
+_MOYER_VOICE     = None    # Melinda Wenner Moyer — "Now What"
 
 
-def get_levelup_voice():
-    """Return a blended voice tensor: am_michael 50% + am_adam 50%."""
-    global _LEVELUP_VOICE
-    if _LEVELUP_VOICE is None:
-        from kokoro import KPipeline
-        _pipe = KPipeline(lang_code="a")
-        t1 = _pipe.load_voice("am_michael")
-        t2 = _pipe.load_voice("am_adam")
-        _LEVELUP_VOICE = 0.5 * t1 + 0.5 * t2
-    return _LEVELUP_VOICE
+def _load_blend(*weighted_voices):
+    """Load a blend of voices. Args: (weight, voice_name), ..."""
+    from kokoro import KPipeline
+    _pipe = KPipeline(lang_code="a")
+    blend = None
+    for weight, name in weighted_voices:
+        t = _pipe.load_voice(name)
+        blend = weight * t if blend is None else blend + weight * t
+    return blend
+
+
+def get_granted_voice():
+    """Adam Grant — dynamic, animated, higher-pitched professor/speaker.
+    am_michael 35% + bm_lewis 20% + af_heart 25% + af_sky 20%.
+    (am_adam dropped — its firm/intense quality was reading as 'mad'.)"""
+    global _GRANTED_VOICE
+    if _GRANTED_VOICE is None:
+        _GRANTED_VOICE = _load_blend(
+            (0.35, "am_michael"), (0.20, "bm_lewis"),
+            (0.25, "af_heart"),   (0.20, "af_sky"),
+        )
+    return _GRANTED_VOICE
+
+
+def get_glazer_voice():
+    """Robert Glazer — warm, conversational, podcast-host friendly.
+    7-voice blend for distinctive layered texture:
+      am_michael 30% + bm_george 15% + bm_lewis 10% + am_adam 10%
+      + af_bella 15% + af_heart 10% + af_sarah 10%
+    Male/female split: 65/35.  US/UK split: 75/25."""
+    global _GLAZER_VOICE
+    if _GLAZER_VOICE is None:
+        _GLAZER_VOICE = _load_blend(
+            (0.30, "am_michael"), (0.15, "bm_george"), (0.10, "bm_lewis"),
+            (0.10, "am_adam"),
+            (0.15, "af_bella"),   (0.10, "af_heart"), (0.10, "af_sarah"),
+        )
+    return _GLAZER_VOICE
+
+
+def get_evans_voice():
+    """Ethan Evans — firm, articulate senior exec voice.
+    am_adam 65% + am_michael 25% + af_nicole 10% (warmth lift).
+    am_adam's firmness fits Ethan's persona — kept as primary per user listen test."""
+    global _EVANS_VOICE
+    if _EVANS_VOICE is None:
+        _EVANS_VOICE = _load_blend(
+            (0.65, "am_adam"), (0.25, "am_michael"), (0.10, "af_nicole")
+        )
+    return _EVANS_VOICE
+
+
+def get_alexander_voice():
+    """Scott Alexander — light, thoughtful rationalist blogger.
+    bm_lewis 40% + am_michael 35% + af_nicole 15% + am_adam 10%."""
+    global _ALEXANDER_VOICE
+    if _ALEXANDER_VOICE is None:
+        _ALEXANDER_VOICE = _load_blend(
+            (0.40, "bm_lewis"),  (0.35, "am_michael"),
+            (0.15, "af_nicole"), (0.10, "am_adam"),
+        )
+    return _ALEXANDER_VOICE
+
+
+def get_moyer_voice():
+    """Melinda Wenner Moyer — warm conversational science journalist.
+    af_nicole 60% + af_heart 40%."""
+    global _MOYER_VOICE
+    if _MOYER_VOICE is None:
+        _MOYER_VOICE = _load_blend((0.6, "af_nicole"), (0.4, "af_heart"))
+    return _MOYER_VOICE
 
 
 def pick_voice(subject: str, sender: str = ""):
@@ -59,9 +149,22 @@ def pick_voice(subject: str, sender: str = ""):
     for prefix, voice in VOICE_MAP:
         if s.startswith(prefix):
             return voice
-    # Sender-based matching for Level Up Newsletter (70/30 male blend).
-    if "level up newsletter" in sender.lower():
-        return get_levelup_voice()
+    sender_l = sender.lower()
+    # Adam Grant — "Granted" newsletter.
+    if "adam grant" in sender_l:
+        return get_granted_voice()
+    # Robert Glazer — "Friday Forward". Match by sender OR subject prefix.
+    if "robert glazer" in sender_l or s.startswith("friday forward"):
+        return get_glazer_voice()
+    # Ethan Evans — "Level Up Newsletter".
+    if "ethan evans" in sender_l or "level up newsletter" in sender_l:
+        return get_evans_voice()
+    # Scott Alexander — "Astral Codex Ten".
+    if "scott alexander" in sender_l or "astralcodexten" in sender_l:
+        return get_alexander_voice()
+    # Melinda Wenner Moyer — "Now What".
+    if "melinda wenner moyer" in sender_l or "melindawmoyer" in sender_l:
+        return get_moyer_voice()
     return DEFAULT_VOICE
 
 
@@ -88,22 +191,26 @@ def tag_mp3(path, subject, date_str, sender=""):
 SCP_DEST = "carl@nuc:containers/audiobookshelf/podcasts/LevelUp/"
 
 
-def upload_mp3(path):
-    """Upload MP3 to audiobookshelf via SCP."""
+def upload_mp3(path) -> bool:
+    """Upload MP3 to audiobookshelf via SCP. Returns True on success."""
     print(f"  Uploading to {SCP_DEST}...")
     result = subprocess.run(["scp", path, SCP_DEST], capture_output=True, text=True)
     if result.returncode == 0:
         print(f"  Uploaded OK")
-    else:
-        print(f"  Upload failed: {result.stderr.strip()}")
+        return True
+    print(f"  Upload failed: {result.stderr.strip()}")
+    return False
 
 
-def process_email(subject, date_str, body_plain, body_html, sender="", voice=None):
+def process_email(subject, date_str, body_plain, body_html, sender="", voice=None, msg_id=None):
     slug     = f"{date_str}_{slugify(subject)}"
     out_path = os.path.join(AUDIO_DIR, f"{slug}.mp3")
 
     if os.path.exists(out_path):
         print(f"  Already exists, skipping: {out_path}")
+        # Re-trash in case a previous run uploaded but failed to trash.
+        if msg_id:
+            trash_message(msg_id)
         return out_path
 
     print(f"\nConverting: {subject}")
@@ -130,20 +237,36 @@ def process_email(subject, date_str, body_plain, body_html, sender="", voice=Non
         return None
 
     chosen_voice = voice or pick_voice(subject, sender=sender)
-    voice_label = "am_michael+am_adam(50/50)" if isinstance(chosen_voice, torch.FloatTensor) else chosen_voice
+    if isinstance(chosen_voice, torch.FloatTensor):
+        if chosen_voice is _GRANTED_VOICE:
+            voice_label = "am_michael+bm_lewis+af_heart+af_sky(35/20/25/20) [Grant]"
+        elif chosen_voice is _GLAZER_VOICE:
+            voice_label = "am_michael+bm_george+bm_lewis+am_adam+af_bella+af_heart+af_sarah(30/15/10/10/15/10/10) [Glazer]"
+        elif chosen_voice is _EVANS_VOICE:
+            voice_label = "am_adam+am_michael+af_nicole(65/25/10) [Evans]"
+        elif chosen_voice is _ALEXANDER_VOICE:
+            voice_label = "bm_lewis+am_michael+af_nicole+am_adam(40/35/15/10) [Alexander]"
+        elif chosen_voice is _MOYER_VOICE:
+            voice_label = "af_nicole+af_heart(60/40) [Moyer]"
+        else:
+            voice_label = "blended"
+    else:
+        voice_label = chosen_voice
     print(f"  Text length: {len(text)} chars  |  voice: {voice_label}")
     text_to_audio(text, voice=chosen_voice, output_file=out_path)
     tag_mp3(out_path, subject=subject, date_str=date_str, sender=sender)
     print(f"  Saved: {out_path}")
-    upload_mp3(out_path)
+    if upload_mp3(out_path) and msg_id:
+        trash_message(msg_id)
     return out_path
 
 
-if len(sys.argv) < 2:
-    print("Usage: run_tts.py <emails.json>", file=sys.stderr)
-    sys.exit(1)
+if __name__ == "__main__":
+    if len(sys.argv) < 2:
+        print("Usage: run_tts.py <emails.json>", file=sys.stderr)
+        sys.exit(1)
 
-with open(sys.argv[1]) as f:
-    emails = json.load(f)
-saved  = [process_email(**e) for e in emails]
-print("\nDone:", [p for p in saved if p])
+    with open(sys.argv[1]) as f:
+        emails = json.load(f)
+    saved = [process_email(**e) for e in emails]
+    print("\nDone:", [p for p in saved if p])
