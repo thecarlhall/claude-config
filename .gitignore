@@ -4,6 +4,7 @@
 !.env.example
 claude.json
 !claude.json.example
+client_secret.json
 
 # Backups created by setup.sh
 *.bak.*
