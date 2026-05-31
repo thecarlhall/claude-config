@@ -125,7 +125,7 @@ Search across the following sources and topics. Note cross-source trends.
 
 ## Step 3 — Write the transcript
 
-Structure the transcript in section order: Weather → Email Digest → Local News → Industry News.
+Structure the transcript in section order: Weather → Email Digest → Local News → Industry News → Daily Grounding.
 
 Format each line with a speaker tag:
 
@@ -140,6 +140,7 @@ Rules:
 - Each section opens and closes with Marcus.
 - **Weather:** Sofia solo, 150–200 words, no conversation. Marcus hands off, Sofia summarizes, Marcus moves on.
 - **Email Digest:** Marcus solo, 100–150 words. `watches` label items listed briefly, then inbox highlights. No contributor lines.
+- **Daily Grounding:** Marcus solo, 60–90 words. Close the episode with a brief reflection drawn from Buddhism, Stoicism, or meditation philosophy — a quote, a teaching, or a framing thought. It should feel like a natural pause before the day begins, not a lecture. Pick something relevant to the week's themes if a connection is natural, otherwise choose something timeless. End with a simple sign-off: "That's Getting Carlibrated for [day]. Have a good one."
 - Sofia's deep-dive topic must be from the AI or business/strategy categories.
 - Oliver's deep-dive topic must be from cloud, engineering, or startup categories.
 - Deep-dive exchanges run 300–500 words each; all other contributor lines are ≤ 2 sentences.
