@@ -206,37 +206,32 @@ JUNK_TEXT = [
 ]
 
 
-def _is_boilerplate(text: str, patterns: list) -> bool:
-    low = text.lower()
-    return any(re.search(p, low) for p in patterns)
+_HEADER_RE = re.compile("|".join(HEADER_BOILERPLATE), re.IGNORECASE)
+_FOOTER_RE = re.compile("|".join(FOOTER_BOILERPLATE), re.IGNORECASE)
+_JUNK_RE   = re.compile("|".join(JUNK_TEXT))
+
+
+def _boilerplate_range(items, get_text):
+    """Return (start, end) indices after trimming header/footer boilerplate."""
+    n = len(items)
+    start = 0
+    for i in range(min(5, n)):
+        if _HEADER_RE.search(get_text(items[i])):
+            start = i + 1
+    half = n // 2
+    end = n
+    for i in range(half, n):
+        if _FOOTER_RE.search(get_text(items[i])):
+            end = i
+            break
+    return start, end
 
 
 def _clean_nodes(nodes: list) -> list:
     """Strip header/footer boilerplate nodes and obvious junk."""
-    n = len(nodes)
-
-    # --- header: scan first 5 nodes ---
-    start = 0
-    for i in range(min(5, n)):
-        if _is_boilerplate(nodes[i].text, HEADER_BOILERPLATE):
-            start = i + 1
-
-    # --- footer: scan second half ---
-    half = n // 2
-    end = n
-    for i in range(half, n):
-        if _is_boilerplate(nodes[i].text, FOOTER_BOILERPLATE):
-            end = i
-            break
-
-    result = nodes[start:end]
-
-    # --- remove junk lines ---
-    result = [nd for nd in result
-              if not _is_boilerplate(nd.text, JUNK_TEXT)
-              and len(nd.text.strip()) > 1]
-
-    return result
+    start, end = _boilerplate_range(nodes, lambda nd: nd.text)
+    return [nd for nd in nodes[start:end]
+            if not _JUNK_RE.search(nd.text) and len(nd.text.strip()) > 1]
 
 
 # ---------------------------------------------------------------------------
@@ -252,7 +247,6 @@ def nodes_to_text(nodes: list) -> str:
     a period appended if none is present.
     """
     parts = []
-    prev_was_heading = False
 
     for nd in nodes:
         text = nd.text.strip()
@@ -260,33 +254,22 @@ def nodes_to_text(nodes: list) -> str:
             continue
 
         if nd.tag in HEADING_TAGS:
-            # Always surround headings with blank lines
             parts.append("")
             parts.append(text)
             parts.append("")
-            prev_was_heading = True
 
         elif nd.tag == "li":
-            # List items: convert to a declarative sentence form
             if text and text[-1] not in ".!?:":
                 text = text + "."
             parts.append(text)
-            prev_was_heading = False
 
         elif nd.tag == "blockquote":
             parts.append("")
             parts.append(text)
             parts.append("")
-            prev_was_heading = False
 
         else:
-            # Body paragraph
-            if prev_was_heading:
-                # Already have blank lines from the heading — don't double-up
-                parts.append(text)
-            else:
-                parts.append(text)
-            prev_was_heading = False
+            parts.append(text)
 
     raw = "\n".join(parts)
     # Collapse runs of 3+ blank lines to 2
@@ -406,20 +389,8 @@ def clean_body(plain: str = "", html: str = "") -> str:
     raw = plain.strip()
     lines = raw.splitlines()
 
-    # Apply the same boilerplate stripping to plain-text lines
-    n = len(lines)
-    start = 0
-    for i in range(min(5, n)):
-        if _is_boilerplate(lines[i], HEADER_BOILERPLATE):
-            start = i + 1
-    half = n // 2
-    end = n
-    for i in range(half, n):
-        if _is_boilerplate(lines[i], FOOTER_BOILERPLATE):
-            end = i
-            break
-    lines = lines[start:end]
-    lines = [l for l in lines if not _is_boilerplate(l, JUNK_TEXT)]
+    start, end = _boilerplate_range(lines, lambda l: l)
+    lines = [l for l in lines[start:end] if not _JUNK_RE.search(l)]
 
     # Collapse blanks
     out, prev_blank = [], False

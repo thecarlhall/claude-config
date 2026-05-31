@@ -15,7 +15,6 @@ Run inside the kokoro-pdf-tts uv environment:
         uv run python ~/.claude/skills/levelup-email-tts/scripts/run_tts.py /tmp/levelup_emails.json
 """
 import sys, os, re, json, tempfile, subprocess
-import torch
 from mutagen.id3 import ID3, TIT2, TPE1, TALB, TDRC, TCON, ID3NoHeaderError
 
 PDF_TTS_DIR = os.path.expanduser("~/devel/kokoro-pdf-tts")
@@ -56,116 +55,79 @@ def trash_message(msg_id: str) -> bool:
 
 # Voice assignments per newsletter series.
 # Matched against the start of the subject line (case-insensitive).
-# Note: Friday Forward (Robert Glazer) and Level Up Newsletter (Ethan Evans) are
-# now handled by sender/subject matching in pick_voice() since they use blends.
 VOICE_MAP = [
     ("tbl:",            "af_heart"),     # The Better Leader — female
 ]
 DEFAULT_VOICE = "af_bella"              # fallback for unrecognised series
 
-# Lazy-loaded voice blends, keyed by author/newsletter.
-_GRANTED_VOICE   = None    # Adam Grant — "Granted"
-_GLAZER_VOICE    = None    # Robert Glazer — "Friday Forward"
-_EVANS_VOICE     = None    # Ethan Evans — "Level Up Newsletter"
-_ALEXANDER_VOICE = None    # Scott Alexander — "Astral Codex Ten"
-_MOYER_VOICE     = None    # Melinda Wenner Moyer — "Now What"
+_PIPELINE = None
+_BLEND_CACHE: dict = {}
 
 
-def _load_blend(*weighted_voices):
-    """Load a blend of voices. Args: (weight, voice_name), ..."""
-    from kokoro import KPipeline
-    _pipe = KPipeline(lang_code="a")
-    blend = None
-    for weight, name in weighted_voices:
-        t = _pipe.load_voice(name)
-        blend = weight * t if blend is None else blend + weight * t
-    return blend
+def _get_pipeline():
+    global _PIPELINE
+    if _PIPELINE is None:
+        from kokoro import KPipeline
+        _PIPELINE = KPipeline(lang_code="a")
+    return _PIPELINE
 
 
-def get_granted_voice():
-    """Adam Grant — dynamic, animated, higher-pitched professor/speaker.
-    am_michael 35% + bm_lewis 20% + af_heart 25% + af_sky 20%.
-    (am_adam dropped — its firm/intense quality was reading as 'mad'.)"""
-    global _GRANTED_VOICE
-    if _GRANTED_VOICE is None:
-        _GRANTED_VOICE = _load_blend(
-            (0.35, "am_michael"), (0.20, "bm_lewis"),
-            (0.25, "af_heart"),   (0.20, "af_sky"),
-        )
-    return _GRANTED_VOICE
+def _get_blend(label, specs):
+    if label not in _BLEND_CACHE:
+        pipe = _get_pipeline()
+        blend = None
+        for weight, name in specs:
+            t = pipe.load_voice(name)
+            blend = weight * t if blend is None else blend + weight * t
+        _BLEND_CACHE[label] = blend
+    return _BLEND_CACHE[label]
 
 
-def get_glazer_voice():
-    """Robert Glazer — warm, conversational, podcast-host friendly.
-    7-voice blend for distinctive layered texture:
-      am_michael 30% + bm_george 15% + bm_lewis 10% + am_adam 10%
-      + af_bella 15% + af_heart 10% + af_sarah 10%
-    Male/female split: 65/35.  US/UK split: 75/25."""
-    global _GLAZER_VOICE
-    if _GLAZER_VOICE is None:
-        _GLAZER_VOICE = _load_blend(
-            (0.30, "am_michael"), (0.15, "bm_george"), (0.10, "bm_lewis"),
-            (0.10, "am_adam"),
-            (0.15, "af_bella"),   (0.10, "af_heart"), (0.10, "af_sarah"),
-        )
-    return _GLAZER_VOICE
+# Each entry: (sender_keywords, subject_prefixes, label, weighted_voices)
+# am_adam dropped from Grant blend — firm/intense quality reads as 'mad'
+_SENDER_BLENDS = [
+    (
+        ["adam grant"], [],
+        "am_michael+bm_lewis+af_heart+af_sky(35/20/25/20) [Grant]",
+        [(0.35, "am_michael"), (0.20, "bm_lewis"), (0.25, "af_heart"), (0.20, "af_sky")],
+    ),
+    # warm, conversational; 7-voice blend male/female 65/35, US/UK 75/25
+    (
+        ["robert glazer"], ["friday forward"],
+        "am_michael+bm_george+bm_lewis+am_adam+af_bella+af_heart+af_sarah(30/15/10/10/15/10/10) [Glazer]",
+        [(0.30, "am_michael"), (0.15, "bm_george"), (0.10, "bm_lewis"),
+         (0.10, "am_adam"), (0.15, "af_bella"), (0.10, "af_heart"), (0.10, "af_sarah")],
+    ),
+    # am_adam's firmness fits Ethan's persona — kept as primary per listen test
+    (
+        ["ethan evans", "level up newsletter"], [],
+        "am_adam+am_michael+af_nicole(65/25/10) [Evans]",
+        [(0.65, "am_adam"), (0.25, "am_michael"), (0.10, "af_nicole")],
+    ),
+    (
+        ["scott alexander", "astralcodexten"], [],
+        "bm_lewis+am_michael+af_nicole+am_adam(40/35/15/10) [Alexander]",
+        [(0.40, "bm_lewis"), (0.35, "am_michael"), (0.15, "af_nicole"), (0.10, "am_adam")],
+    ),
+    (
+        ["melinda wenner moyer", "melindawmoyer"], [],
+        "af_nicole+af_heart(60/40) [Moyer]",
+        [(0.6, "af_nicole"), (0.4, "af_heart")],
+    ),
+]
 
 
-def get_evans_voice():
-    """Ethan Evans — firm, articulate senior exec voice.
-    am_adam 65% + am_michael 25% + af_nicole 10% (warmth lift).
-    am_adam's firmness fits Ethan's persona — kept as primary per user listen test."""
-    global _EVANS_VOICE
-    if _EVANS_VOICE is None:
-        _EVANS_VOICE = _load_blend(
-            (0.65, "am_adam"), (0.25, "am_michael"), (0.10, "af_nicole")
-        )
-    return _EVANS_VOICE
-
-
-def get_alexander_voice():
-    """Scott Alexander — light, thoughtful rationalist blogger.
-    bm_lewis 40% + am_michael 35% + af_nicole 15% + am_adam 10%."""
-    global _ALEXANDER_VOICE
-    if _ALEXANDER_VOICE is None:
-        _ALEXANDER_VOICE = _load_blend(
-            (0.40, "bm_lewis"),  (0.35, "am_michael"),
-            (0.15, "af_nicole"), (0.10, "am_adam"),
-        )
-    return _ALEXANDER_VOICE
-
-
-def get_moyer_voice():
-    """Melinda Wenner Moyer — warm conversational science journalist.
-    af_nicole 60% + af_heart 40%."""
-    global _MOYER_VOICE
-    if _MOYER_VOICE is None:
-        _MOYER_VOICE = _load_blend((0.6, "af_nicole"), (0.4, "af_heart"))
-    return _MOYER_VOICE
-
-
-def pick_voice(subject: str, sender: str = ""):
+def pick_voice(subject: str, sender: str = "") -> tuple:
+    """Returns (voice, label); voice is a tensor or a string voice name."""
     s = subject.lower()
     for prefix, voice in VOICE_MAP:
         if s.startswith(prefix):
-            return voice
+            return voice, voice
     sender_l = sender.lower()
-    # Adam Grant — "Granted" newsletter.
-    if "adam grant" in sender_l:
-        return get_granted_voice()
-    # Robert Glazer — "Friday Forward". Match by sender OR subject prefix.
-    if "robert glazer" in sender_l or s.startswith("friday forward"):
-        return get_glazer_voice()
-    # Ethan Evans — "Level Up Newsletter".
-    if "ethan evans" in sender_l or "level up newsletter" in sender_l:
-        return get_evans_voice()
-    # Scott Alexander — "Astral Codex Ten".
-    if "scott alexander" in sender_l or "astralcodexten" in sender_l:
-        return get_alexander_voice()
-    # Melinda Wenner Moyer — "Now What".
-    if "melinda wenner moyer" in sender_l or "melindawmoyer" in sender_l:
-        return get_moyer_voice()
-    return DEFAULT_VOICE
+    for sender_kws, subject_prefixes, label, specs in _SENDER_BLENDS:
+        if any(kw in sender_l for kw in sender_kws) or any(s.startswith(p) for p in subject_prefixes):
+            return _get_blend(label, specs), label
+    return DEFAULT_VOICE, DEFAULT_VOICE
 
 
 def slugify(s):
@@ -236,22 +198,10 @@ def process_email(subject, date_str, body_plain, body_html, sender="", voice=Non
         print(f"  Skipping '{subject}' -- cleaned body too short ({len(text)} chars)")
         return None
 
-    chosen_voice = voice or pick_voice(subject, sender=sender)
-    if isinstance(chosen_voice, torch.FloatTensor):
-        if chosen_voice is _GRANTED_VOICE:
-            voice_label = "am_michael+bm_lewis+af_heart+af_sky(35/20/25/20) [Grant]"
-        elif chosen_voice is _GLAZER_VOICE:
-            voice_label = "am_michael+bm_george+bm_lewis+am_adam+af_bella+af_heart+af_sarah(30/15/10/10/15/10/10) [Glazer]"
-        elif chosen_voice is _EVANS_VOICE:
-            voice_label = "am_adam+am_michael+af_nicole(65/25/10) [Evans]"
-        elif chosen_voice is _ALEXANDER_VOICE:
-            voice_label = "bm_lewis+am_michael+af_nicole+am_adam(40/35/15/10) [Alexander]"
-        elif chosen_voice is _MOYER_VOICE:
-            voice_label = "af_nicole+af_heart(60/40) [Moyer]"
-        else:
-            voice_label = "blended"
+    if voice is not None:
+        chosen_voice, voice_label = voice, "custom"
     else:
-        voice_label = chosen_voice
+        chosen_voice, voice_label = pick_voice(subject, sender=sender)
     print(f"  Text length: {len(text)} chars  |  voice: {voice_label}")
     text_to_audio(text, voice=chosen_voice, output_file=out_path)
     tag_mp3(out_path, subject=subject, date_str=date_str, sender=sender)
